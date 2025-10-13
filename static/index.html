@@ -293,7 +293,9 @@
     </footer>
 
     <!-- ChatKit SDK -->
-    <script src="https://cdn.openai.com/chatkit/v1/chatkit.js" async></script>
+
+
+    <script src="https://cdn.platform.openai.com/deployments/chatkit/chatkit.js" async></script>
 
     <script>
         // Chat UI Toggle
@@ -321,40 +323,44 @@
             try {
                 statusMessage.textContent = 'Connecting to AI assistant...';
 
-                // Fetch session from backend
-                const response = await fetch('/api/chatkit/session', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({}),
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Failed to create session: ${response.statusText}`);
-                }
-
-                const data = await response.json();
-
-                if (!data.client_secret || !data.agent_id) {
-                    throw new Error('Invalid session data received');
-                }
-
                 // Wait for ChatKit to be available
                 await customElements.whenDefined('openai-chatkit');
 
                 // Create and configure ChatKit element
                 const chatkitWidget = document.getElementById('chatkit-widget');
-                chatkitWidget.innerHTML = '<openai-chatkit></openai-chatkit>';
+                chatkitWidget.innerHTML = '<openai-chatkit id="my-chat"></openai-chatkit>';
 
-                const chatElement = chatkitWidget.querySelector('openai-chatkit');
+                const chatkit = document.getElementById('my-chat');
 
-                // Configure ChatKit
-                chatElement.setAttribute('agent-id', data.agent_id);
-                chatElement.setAttribute('client-secret', data.client_secret);
-
-                // Optional: Add theme customization
-                chatElement.setAttribute('theme', 'light');
+                // Configure ChatKit with getClientSecret callback
+                chatkit.setOptions({
+                    api: {
+                        async getClientSecret(currentClientSecret) {
+                            if (!currentClientSecret) {
+                                // Initial connection - get new client secret
+                                const res = await fetch('/api/chatkit/session', { method: 'POST' });
+                                if (!res.ok) {
+                                    throw new Error(`Failed to start session: ${res.statusText}`);
+                                }
+                                const { client_secret } = await res.json();
+                                return client_secret;
+                            }
+                            // Refresh existing client secret
+                            const res = await fetch('/api/chatkit/refresh', {
+                                method: 'POST',
+                                body: JSON.stringify({ currentClientSecret }),
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                            });
+                            if (!res.ok) {
+                                throw new Error(`Failed to refresh session: ${res.statusText}`);
+                            }
+                            const { client_secret } = await res.json();
+                            return client_secret;
+                        }
+                    },
+                });
 
                 chatInitialized = true;
                 statusMessage.style.display = 'none';

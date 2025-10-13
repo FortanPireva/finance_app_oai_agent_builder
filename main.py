@@ -52,6 +52,16 @@ class SessionResponse(BaseModel):
     agent_id: str
 
 
+class ClientSecretResponse(BaseModel):
+    """Response model for client secret"""
+    client_secret: str
+
+
+class RefreshRequest(BaseModel):
+    """Request model for refreshing client secret"""
+    currentClientSecret: str
+
+
 class ToolCallRequest(BaseModel):
     """Request model for testing tool calls"""
     tool_name: str
@@ -112,6 +122,71 @@ async def create_chatkit_session(request: SessionRequest = SessionRequest()):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
+
+
+@app.post("/api/chatkit/start", response_model=ClientSecretResponse)
+async def start_chatkit_session():
+    """
+    Start a new ChatKit session and return a client secret.
+    This is called when the user first opens the chat.
+    """
+    try:
+        if not config.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured. Please set OPENAI_API_KEY in environment."
+            )
+        
+        if not config.OPENAI_AGENT_ID:
+            raise HTTPException(
+                status_code=500,
+                detail="Agent ID not configured. Please set OPENAI_AGENT_ID in environment."
+            )
+        
+        # Note: In production, this would call the OpenAI Agent API to create a new session
+        # and return a proper client secret. For now, returning the API key as a placeholder.
+        # The actual implementation would be:
+        # session = client.beta.agents.sessions.create(agent_id=config.OPENAI_AGENT_ID)
+        # return ClientSecretResponse(client_secret=session.client_secret)
+        
+        return ClientSecretResponse(client_secret=config.OPENAI_API_KEY)
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start session: {str(e)}")
+
+
+@app.post("/api/chatkit/refresh", response_model=ClientSecretResponse)
+async def refresh_chatkit_session(request: RefreshRequest):
+    """
+    Refresh an existing ChatKit session and return a new client secret.
+    This is called when the current client secret expires.
+    """
+    try:
+        if not config.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured. Please set OPENAI_API_KEY in environment."
+            )
+        
+        if not config.OPENAI_AGENT_ID:
+            raise HTTPException(
+                status_code=500,
+                detail="Agent ID not configured. Please set OPENAI_AGENT_ID in environment."
+            )
+        
+        # Note: In production, this would call the OpenAI Agent API to refresh the session
+        # using the current client secret and return a new one.
+        # The actual implementation would be:
+        # session = client.beta.agents.sessions.refresh(
+        #     agent_id=config.OPENAI_AGENT_ID,
+        #     client_secret=request.currentClientSecret
+        # )
+        # return ClientSecretResponse(client_secret=session.client_secret)
+        
+        return ClientSecretResponse(client_secret=config.OPENAI_API_KEY)
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh session: {str(e)}")
 
 
 # Tool testing endpoints (for development/debugging)
