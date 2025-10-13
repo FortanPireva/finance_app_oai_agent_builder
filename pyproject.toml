@@ -1,0 +1,21 @@
+[project]
+name = "finance-support-chatbot"
+version = "1.0.0"
+description = "FinTech Support Chatbot with OpenAI Agent Builder, ChatKit, and FAISS"
+requires-python = ">=3.9"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.7.0",
+    "ruff>=0.0.285",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
