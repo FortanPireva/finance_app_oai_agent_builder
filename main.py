@@ -68,6 +68,20 @@ class ToolCallRequest(BaseModel):
     parameters: Dict[str, Any]
 
 
+class MessageRequest(BaseModel):
+    """Request model for sending a message"""
+    thread_id: str
+    content: str
+    role: str = "user"
+    file_ids: Optional[list[str]] = None
+
+
+class RunRequest(BaseModel):
+    """Request model for running the assistant"""
+    thread_id: str
+    instructions: Optional[str] = None
+
+
 # Health check endpoint
 @app.get("/")
 async def root():
@@ -90,7 +104,7 @@ async def health_check():
 async def create_chatkit_session(request: SessionRequest = SessionRequest()):
     """
     Create a new ChatKit session for the agent.
-    Returns a client secret that the frontend uses to connect to the agent.
+    Creates a thread for the conversation and returns session details.
     """
     try:
         if not config.OPENAI_API_KEY:
@@ -105,18 +119,20 @@ async def create_chatkit_session(request: SessionRequest = SessionRequest()):
                 detail="Agent ID not configured. Please set OPENAI_AGENT_ID in environment."
             )
         
-        # Note: As of the implementation, OpenAI's ChatKit/Agent Builder API
-        # for session creation might differ. This is a conceptual implementation.
-        # You would use the actual SDK method like:
-        # session = client.beta.agents.sessions.create(agent_id=config.OPENAI_AGENT_ID)
+        # Create a new thread for this conversation session
+        # Each thread represents a conversation context with the assistant
+        thread = client.beta.threads.create(
+            metadata={
+                "user_id": request.user_id or "anonymous",
+                **(request.metadata or {})
+            }
+        )
         
-        # For now, returning the agent_id and a placeholder structure
-        # In production, this would call the actual OpenAI Agent API
-        
-        # Placeholder response - replace with actual OpenAI API call
+        # Return the thread ID as the session ID
+        # The thread ID is used to maintain conversation context
         return SessionResponse(
-            session_id=f"session_{request.user_id or 'anonymous'}",
-            client_secret=config.OPENAI_API_KEY,  # In production, this would be a session token
+            session_id=thread.id,
+            client_secret=config.OPENAI_API_KEY,  # Backend uses API key; frontend shouldn't expose this
             agent_id=config.OPENAI_AGENT_ID
         )
     
@@ -129,6 +145,8 @@ async def start_chatkit_session():
     """
     Start a new ChatKit session and return a client secret.
     This is called when the user first opens the chat.
+    Note: In a production environment, you should generate a temporary token
+    instead of exposing the API key directly to the frontend.
     """
     try:
         if not config.OPENAI_API_KEY:
@@ -143,12 +161,10 @@ async def start_chatkit_session():
                 detail="Agent ID not configured. Please set OPENAI_AGENT_ID in environment."
             )
         
-        # Note: In production, this would call the OpenAI Agent API to create a new session
-        # and return a proper client secret. For now, returning the API key as a placeholder.
-        # The actual implementation would be:
-        # session = client.beta.agents.sessions.create(agent_id=config.OPENAI_AGENT_ID)
-        # return ClientSecretResponse(client_secret=session.client_secret)
-        
+        # For ChatKit frontend integration, return the API key
+        # WARNING: In production, implement a token-based auth system
+        # to avoid exposing your API key directly to the frontend
+        # Consider using JWT tokens or OpenAI's session tokens
         return ClientSecretResponse(client_secret=config.OPENAI_API_KEY)
     
     except Exception as e:
@@ -160,6 +176,8 @@ async def refresh_chatkit_session(request: RefreshRequest):
     """
     Refresh an existing ChatKit session and return a new client secret.
     This is called when the current client secret expires.
+    Note: With the current implementation using API keys, tokens don't expire.
+    In production, implement proper token rotation with JWT or session tokens.
     """
     try:
         if not config.OPENAI_API_KEY:
@@ -174,19 +192,216 @@ async def refresh_chatkit_session(request: RefreshRequest):
                 detail="Agent ID not configured. Please set OPENAI_AGENT_ID in environment."
             )
         
-        # Note: In production, this would call the OpenAI Agent API to refresh the session
-        # using the current client secret and return a new one.
-        # The actual implementation would be:
-        # session = client.beta.agents.sessions.refresh(
-        #     agent_id=config.OPENAI_AGENT_ID,
-        #     client_secret=request.currentClientSecret
-        # )
-        # return ClientSecretResponse(client_secret=session.client_secret)
+        # Verify the current client secret is valid
+        if request.currentClientSecret != config.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid client secret provided"
+            )
         
+        # In production, generate and return a new token
+        # For now, return the same API key
         return ClientSecretResponse(client_secret=config.OPENAI_API_KEY)
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to refresh session: {str(e)}")
+
+
+@app.post("/api/chatkit/message")
+async def send_message(request: MessageRequest):
+    """
+    Send a message to a thread.
+    This adds a user message to the conversation thread.
+    """
+    try:
+        if not config.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured."
+            )
+        
+        # Create a message in the thread
+        message = client.beta.threads.messages.create(
+            thread_id=request.thread_id,
+            role=request.role,
+            content=request.content,
+            file_ids=request.file_ids or []
+        )
+        
+        return {
+            "message_id": message.id,
+            "thread_id": request.thread_id,
+            "role": message.role,
+            "content": message.content,
+            "created_at": message.created_at
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send message: {str(e)}")
+
+
+@app.post("/api/chatkit/run")
+async def run_assistant(request: RunRequest):
+    """
+    Run the assistant on a thread to generate a response.
+    This processes all messages in the thread and generates an assistant response.
+    """
+    try:
+        if not config.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured."
+            )
+        
+        if not config.OPENAI_AGENT_ID:
+            raise HTTPException(
+                status_code=500,
+                detail="Agent ID not configured."
+            )
+        
+        # Create a run to process the thread with the assistant
+        run = client.beta.threads.runs.create(
+            thread_id=request.thread_id,
+            assistant_id=config.OPENAI_AGENT_ID,
+            instructions=request.instructions
+        )
+        
+        return {
+            "run_id": run.id,
+            "thread_id": request.thread_id,
+            "status": run.status,
+            "assistant_id": run.assistant_id,
+            "created_at": run.created_at
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to run assistant: {str(e)}")
+
+
+@app.get("/api/chatkit/run/{thread_id}/{run_id}")
+async def get_run_status(thread_id: str, run_id: str):
+    """
+    Get the status of a run.
+    Use this to poll for run completion and get the assistant's response.
+    """
+    try:
+        if not config.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured."
+            )
+        
+        # Retrieve the run status
+        run = client.beta.threads.runs.retrieve(
+            thread_id=thread_id,
+            run_id=run_id
+        )
+        
+        response = {
+            "run_id": run.id,
+            "status": run.status,
+            "thread_id": run.thread_id,
+            "assistant_id": run.assistant_id,
+            "created_at": run.created_at,
+            "completed_at": run.completed_at,
+            "failed_at": run.failed_at,
+            "cancelled_at": run.cancelled_at,
+            "expires_at": run.expires_at
+        }
+        
+        # If run requires action (function calling), include required actions
+        if run.status == "requires_action":
+            response["required_action"] = run.required_action
+        
+        # If completed, retrieve the latest messages
+        if run.status == "completed":
+            messages = client.beta.threads.messages.list(
+                thread_id=thread_id,
+                order="desc",
+                limit=1
+            )
+            if messages.data:
+                latest_message = messages.data[0]
+                response["latest_message"] = {
+                    "id": latest_message.id,
+                    "role": latest_message.role,
+                    "content": latest_message.content
+                }
+        
+        return response
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get run status: {str(e)}")
+
+
+@app.get("/api/chatkit/messages/{thread_id}")
+async def get_thread_messages(thread_id: str, limit: int = 20, order: str = "desc"):
+    """
+    Get messages from a thread.
+    Retrieve the conversation history for a given thread.
+    """
+    try:
+        if not config.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured."
+            )
+        
+        # Retrieve messages from the thread
+        messages = client.beta.threads.messages.list(
+            thread_id=thread_id,
+            order=order,
+            limit=limit
+        )
+        
+        return {
+            "thread_id": thread_id,
+            "messages": [
+                {
+                    "id": msg.id,
+                    "role": msg.role,
+                    "content": msg.content,
+                    "created_at": msg.created_at,
+                    "file_ids": msg.file_ids
+                }
+                for msg in messages.data
+            ]
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get messages: {str(e)}")
+
+
+@app.post("/api/chatkit/tool-output")
+async def submit_tool_output(thread_id: str, run_id: str, tool_outputs: list[Dict[str, Any]]):
+    """
+    Submit tool outputs when the assistant requires action.
+    This is used when the assistant calls functions/tools and needs the results.
+    """
+    try:
+        if not config.OPENAI_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OpenAI API key not configured."
+            )
+        
+        # Submit tool outputs to continue the run
+        run = client.beta.threads.runs.submit_tool_outputs(
+            thread_id=thread_id,
+            run_id=run_id,
+            tool_outputs=tool_outputs
+        )
+        
+        return {
+            "run_id": run.id,
+            "status": run.status,
+            "thread_id": thread_id
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to submit tool output: {str(e)}")
 
 
 # Tool testing endpoints (for development/debugging)
